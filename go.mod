@@ -1,3 +1,3 @@
-module github.com/fabulousbernt/gator
+module github.com/FabulousBernt/gator
 
 go 1.25.4
