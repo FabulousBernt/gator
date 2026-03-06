@@ -1,29 +1,138 @@
 package main
 
 import (
-    "fmt"
-    "log"
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"time"
 
-    "github.com/FabulousBernt/gator/internal/config"
+	"github.com/FabulousBernt/gator/internal/config"
+	"github.com/FabulousBernt/gator/internal/database"
+	"github.com/google/uuid"
+	_ "github.com/lib/pq"
 )
 
+type state struct {
+	db  *database.Queries
+	cfg *config.Config
+}
+
+type command struct {
+	name string
+	args []string
+}
+
+func handlerLogin(s *state, cmd command) error {
+	if len(cmd.args) == 0 {
+		return errors.New("login requires a username argument")
+	}
+
+	// Check if the user exists in the database
+	_, err := s.db.GetUser(context.Background(), cmd.args[0])
+	if err != nil {
+		return fmt.Errorf("user not found: %w", err)
+	}
+
+	// Only set the user if they exist
+	err = s.cfg.SetUser(cmd.args[0])
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("User set to:", cmd.args[0])
+	return nil
+}
+
+func handlerRegister(s *state, cmd command) error {
+	// 1. Check if a name was provided
+	if len(cmd.args) == 0 {
+		return errors.New("register requires a username argument")
+	}
+
+	// 2. Create the user in the database
+	user, err := s.db.CreateUser(context.Background(), database.CreateUserParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Name:      cmd.args[0],
+	})
+	if err != nil {
+		return fmt.Errorf("couldn't create user: %w", err)
+	}
+
+	// 3. Set the current user in the config
+	err = s.cfg.SetUser(user.Name)
+	if err != nil {
+		return fmt.Errorf("couldn't set user: %w", err)
+	}
+
+	// 4. Print the created user
+	fmt.Println("User created successfully!")
+	fmt.Printf("ID: %v, Name: %v, CreatedAt: %v\n", user.ID, user.Name, user.CreatedAt)
+	return nil
+}
+
+type commands struct {
+	handlers map[string]func(*state, command) error
+}
+
+func (c *commands) run(s *state, cmd command) error {
+	handler, ok := c.handlers[cmd.name]
+	if !ok {
+		return fmt.Errorf("unknown command: %s", cmd.name)
+	}
+	return handler(s, cmd)
+}
+
+func (c *commands) register(name string, f func(*state, command) error) {
+	c.handlers[name] = f
+}
+
 func main() {
-    // 1. Read the config file
-    cfg, err := config.Read()
-    if err != nil {
-        log.Fatal(err)
-    }
+	// Read config
+	cfg, err := config.Read()
+	if err != nil {
+		log.Fatal(err)
+	}
 
-    // 2. Set the current user and write to disk
-    err = cfg.SetUser("Johnny")
-    if err != nil {
-        log.Fatal(err)
-    }
+	// Open database connection
+	db, err := sql.Open("postgres", cfg.DBUrl)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-    // 3. Read it again and print
-    cfg, err = config.Read()
-    if err != nil {
-        log.Fatal(err)
-    }
-    fmt.Println(cfg)
+	// Create database queries instance
+	dbQueries := database.New(db)
+
+	// Store both in state
+	s := &state{
+		db:  dbQueries,
+		cfg: &cfg,
+	}
+
+	cmds := commands{
+		handlers: make(map[string]func(*state, command) error),
+	}
+
+	cmds.register("login", handlerLogin)
+	cmds.register("register", handlerRegister)
+
+	args := os.Args
+	if len(args) < 2 {
+		fmt.Println("Error: not enough arguments, a command is required")
+		os.Exit(1)
+	}
+
+	cmd := command{
+		name: args[1],
+		args: args[2:],
+	}
+	err = cmds.run(s, cmd)
+	if err != nil {
+		fmt.Println("Error:", err)
+		os.Exit(1)
+	}
 }
