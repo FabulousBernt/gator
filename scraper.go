@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"database/sql"
 	"log"
+	"time"
+
+	"github.com/FabulousBernt/gator/internal/database"
+	"github.com/google/uuid"
 )
 
 func scrapeFeeds(s *state) {
@@ -28,9 +32,38 @@ func scrapeFeeds(s *state) {
 		return
 	}
 
-	// 4. Print the titles
-	fmt.Printf("Fetching feed: %s\n", feed.Name)
+	// 4. Save each post
 	for _, item := range rssFeed.Channel.Item {
-		fmt.Printf(" - %s\n", item.Title)
+		// Parse published_at - try common formats
+		publishedAt := sql.NullTime{}
+		if t, err := time.Parse(time.RFC1123Z, item.PubDate); err == nil {
+			publishedAt = sql.NullTime{Time: t, Valid: true}
+		} else if t, err := time.Parse(time.RFC1123, item.PubDate); err == nil {
+			publishedAt = sql.NullTime{Time: t, Valid: true}
+		}
+
+		// Handle nullable description
+		description := sql.NullString{}
+		if item.Description != "" {
+			description = sql.NullString{String: item.Description, Valid: true}
+		}
+
+		_, err := s.db.CreatePost(context.Background(), database.CreatePostParams{
+			ID:          uuid.New(),
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+			Title:       item.Title,
+			Url:         item.Link,
+			Description: description,
+			PublishedAt: publishedAt,
+			FeedID:      feed.ID,
+		})
+		if err != nil {
+			// Ignore duplicate URL errors, log everything else
+			if err.Error() != "pq: duplicate key value violates unique constraint \"posts_url_key\"" {
+				log.Printf("couldn't save post %s: %v", item.Title, err)
+			}
+		}
 	}
+	log.Printf("collected %d posts from %s", len(rssFeed.Channel.Item), feed.Name)
 }

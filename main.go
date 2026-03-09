@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/FabulousBernt/gator/internal/config"
@@ -220,6 +221,33 @@ func handlerAgg(s *state, cmd command) error {
 	}
 }
 
+func handlerBrowse(s *state, cmd command, user database.User) error {
+	// 1. Get limit, default to 2
+	limit := 2
+	if len(cmd.args) > 0 {
+		var err error
+		limit, err = strconv.Atoi(cmd.args[0])
+		if err != nil {
+			return fmt.Errorf("invalid limit: %w", err)
+		}
+	}
+
+	// 2. Get posts for user
+	posts, err := s.db.GetPostsForUser(context.Background(), database.GetPostsForUserParams{
+		UserID: user.ID,
+		Limit:  int32(limit),
+	})
+	if err != nil {
+		return fmt.Errorf("couldn't get posts: %w", err)
+	}
+
+	// 3. Print each post
+	for _, post := range posts {
+		fmt.Printf("Title: %s\nURL: %s\n\n", post.Title, post.Url)
+	}
+	return nil
+}
+
 type commands struct {
 	handlers map[string]func(*state, command) error
 }
@@ -266,6 +294,7 @@ func main() {
 	cmds.register("follow", middlewareLoggedIn(handlerFollow))
 	cmds.register("following", middlewareLoggedIn(handlerFollowing))
 	cmds.register("unfollow", middlewareLoggedIn(handlerUnfollow))
+	cmds.register("browse", middlewareLoggedIn(handlerBrowse))
 
 	args := os.Args
 	if len(args) < 2 {
